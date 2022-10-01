@@ -1,0 +1,177 @@
+/* mbed Microcontroller Library
+ * Copyright (c) 2019 ARM Limited
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include "mbed.h"
+#include "InterruptIn.h"
+#include "TextLCD.h" 
+
+#define TIEMPO_PASO       500ms
+#define BLINKING_RATE     500ms
+
+Timer t;
+BusOut Colum(D9, D8, D7, D6, D5, D4, D3, D2);
+BusOut Rows(PC_8, PC_9, D15, D14, D13, D12, D11, D10);
+TextLCD lcd(PB_14, PB_13, PA_0, PA_1, PA_4, PB_0); // rs, e, d4-d7
+BusOut bobinas(PC_6, PC_5, PA_12, PA_11);
+DigitalOut Trigger(PC_1);
+InterruptIn Echo(PC_0);
+DigitalIn captura(BUTTON1);
+
+char secuencia[4] = {0x8, 0x4, 0x2, 0x1};
+const char columnas[9] = {0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01, 0x00};
+const char filas[16] = {0x00, 0x48, 0xAB, 0xFC, 0xFC, 0xAB, 0x48, 0x00,
+                        0x00, 0x44, 0xAB, 0xDC, 0xDC, 0xAA, 0x45, 0x00,};
+static int cambio, intercambio, fin, inicio, distancia=0, cont=1,acum=7;
+static int epa=0;
+static int i=0, j=0, l=7, f=0;
+static int c=0, b=0, d=0, contador=0;
+
+
+Thread hilo_motor_paso;
+Thread hilo_trigger;
+Thread hilo_subida;
+Thread hilo_bajada;
+Thread hilo_visualiza;
+Thread hilo_movimiento;
+Thread hilo_LCD;
+
+void motor_paso(void);
+void trigger(void);
+void subida(void);
+void bajada(void);
+void visualiza (void);
+void mueve (void);
+void LCD (void);
+
+Semaphore flanco_subida;
+Semaphore flanco_bajada;
+
+void subida_isr(void);
+void bajada_isr(void);
+
+
+int main()
+{
+    hilo_trigger.start(trigger);
+    hilo_subida.start(subida);
+    hilo_bajada.start(bajada);
+    Echo.rise(subida_isr);
+    Echo.fall(bajada_isr);
+    while (true) {
+        ThisThread::sleep_for(BLINKING_RATE);
+    }
+}
+
+void trigger (void) {
+    while(1){
+        Trigger=1;
+        wait_us(10);
+        Trigger=0;
+        ThisThread::sleep_for(500ms);
+    }
+}
+
+void subida_isr (void){
+    flanco_subida.release();
+}
+
+void subida (void){
+    while(1){
+     flanco_subida.acquire();
+     t.reset();
+     t.start();
+    }
+}
+
+void bajada_isr (void){
+    flanco_bajada.release();
+}
+
+void bajada (void){
+    while(true){
+     flanco_bajada.acquire();
+     t.stop();
+     printf("La distancia es: %llu cm \n\r", t.elapsed_time().count()/58);
+     if (captura==false){
+            distancia = (t.elapsed_time().count()/58);
+            printf("Pulso es: %u cm \n\r", distancia);
+            hilo_LCD.start(LCD);
+            if(distancia<100 && distancia >2){
+            hilo_motor_paso.start(motor_paso);
+            hilo_movimiento.start(mueve);
+            hilo_visualiza.start(visualiza);
+            }
+
+        }
+    }
+}
+
+
+void mueve (void){
+
+    while (true){
+        f++;
+        d++;
+        if (f==8) f=0;
+        if(d==l){
+            j=j+8;
+            l=l+8;
+            contador++;
+        }
+        ThisThread::sleep_for(500ms);
+    }
+}
+
+void visualiza (void)
+{
+    while(true)
+    {
+        if(contador==distancia){
+            Colum = columnas[0];
+            Rows = ~filas[0];
+            ThisThread::sleep_for(1000s);
+        }
+        else{
+            Colum = columnas[i];
+            Rows = ~(filas[i+j]<<f);
+            i++;
+            if(i==8) i=0;
+            ThisThread::sleep_for(2ms);
+        }
+    }
+}
+
+void motor_paso(void)
+{
+    while(true){ 
+        if(captura == false){
+            while(b<distancia){
+                bobinas = ~secuencia[c];
+                c++;
+                b++;
+                if(c==4) c=0;
+                ThisThread::sleep_for(TIEMPO_PASO);
+            }
+        }
+    }
+}
+
+void LCD (void){
+    while(true){
+        lcd.cls();
+        wait_us(1000);
+        if(distancia<100 && distancia>2){
+            lcd.printf("La distancia es: %u \n", distancia);
+        }
+        else{
+            lcd.printf("Ingresa de nuevo");
+        }
+
+        while(true){
+            lcd.locate(0, 1);
+            ThisThread::sleep_for(BLINKING_RATE);
+        }
+    }
+}
